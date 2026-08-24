@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuração da API
-const API_KEY = process.env.GEMINI_API_KEY || 'COLOQUE A CHAVE AQUI';
-const MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite'];
+const API_KEY = process.env.GEMINI_API_KEY || 'COLOQUE SEU CÓDIGO CHAVE KEY AQUI';
+const MODELS = ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3.7-flash, gemini-3.5-flash-lite'];
 
 // Histórico da conversa
 let conversationHistory = [];
@@ -14,11 +14,27 @@ let isGenerating = false;
 let blockMode = false;
 let blockBuffer = [];
 
+// Função auxiliar para extrair texto com segurança em versões antigas do Node.js
+function extractResponseText(data) {
+  if (
+    data &&
+    data.candidates &&
+    data.candidates[0] &&
+    data.candidates[0].content &&
+    data.candidates[0].content.parts &&
+    data.candidates[0].content.parts[0] &&
+    data.candidates[0].content.parts[0].text
+  ) {
+    return data.candidates[0].content.parts[0].text;
+  }
+  return '';
+}
+
 // Suporte a cores no terminal (Desativa automaticamente se for Windows antigo sem suporte a ANSI)
 const isWindows = process.platform === 'win32';
 const release = os.release() || '';
 const majorVersion = parseInt(release.split('.')[0], 10);
-// Windows 10 build 10.0+ suporta ANSI nativo. Windows 7 (6.1) geralmente não suporta por padrão no cmd.exe
+
 const supportsColor = Boolean(
   process.stdout.isTTY &&
   (!isWindows || majorVersion >= 10 || process.env.ANSICON || process.env.ConEmuANSI === 'ON' || process.env.TERM)
@@ -44,7 +60,6 @@ const rl = readline.createInterface({
 });
 
 function printHeader() {
-
 }
 
 let lastAiResponse = '';
@@ -53,7 +68,6 @@ async function callGeminiStream(userMessage) {
   isGenerating = true;
   lastAiResponse = '';
   
-  // Adiciona a mensagem do usuário ao histórico
   conversationHistory.push({
     role: 'user',
     parts: [{ text: userMessage }]
@@ -78,9 +92,10 @@ async function callGeminiStream(userMessage) {
 
   let success = false;
 
-  for (const model of MODELS) {
+  for (let i = 0; i < MODELS.length; i++) {
+    const model = MODELS[i];
     try {
-      success = await new Promise((resolve) => {
+      success = await new Promise(function (resolve) {
         const options = {
           method: 'POST',
           headers: {
@@ -91,55 +106,53 @@ async function callGeminiStream(userMessage) {
         };
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${API_KEY}`;
-        const req = https.request(url, options, (res) => {
+        const req = https.request(url, options, function (res) {
           if (res.statusCode !== 200) {
             resolve(false);
             return;
           }
 
           let buffer = '';
-          res.on('data', (chunk) => {
+          res.on('data', function (chunk) {
             buffer += chunk.toString('utf8');
             const lines = buffer.split('\n');
-            buffer = lines.pop(); // Mantém linha incompleta no buffer
+            buffer = lines.pop();
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
+            for (let j = 0; j < lines.length; j++) {
+              const line = lines[j];
+              if (line.indexOf('data: ') === 0) {
                 const jsonStr = line.slice(6).trim();
                 if (jsonStr) {
                   try {
                     const data = JSON.parse(jsonStr);
-                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    const text = extractResponseText(data);
                     if (text) {
                       lastAiResponse += text;
                       process.stdout.write(text);
                     }
-                  } catch (e) {
-                    // Ignora eventuais chunks JSON parciais
-                  }
+                  } catch (e) {}
                 }
               }
             }
           });
 
-          res.on('end', () => {
-            // Processa resto do buffer se houver
-            if (buffer.startsWith('data: ')) {
+          res.on('end', function () {
+            if (buffer.indexOf('data: ') === 0) {
               try {
                 const data = JSON.parse(buffer.slice(6).trim());
-                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                const text = extractResponseText(data);
                 if (text) {
                   lastAiResponse += text;
                   process.stdout.write(text);
                 }
-              } catch(e) {}
+              } catch (e) {}
             }
             resolve(true);
           });
         });
 
-        req.on('error', () => resolve(false));
-        req.on('timeout', () => {
+        req.on('error', function () { resolve(false); });
+        req.on('timeout', function () {
           req.destroy();
           resolve(false);
         });
@@ -149,17 +162,13 @@ async function callGeminiStream(userMessage) {
       });
 
       if (success) break;
-    } catch (err) {
-      // Tenta próximo modelo se houver falha
-    }
+    } catch (err) {}
   }
 
   if (!success) {
-    console.log(`\n${colors.red}[Erro: Não foi possível obter resposta da API. Verifique sua conexão com a internet ou limite de requisições.]${colors.reset}`);
-    // Remove a última mensagem que falhou do histórico
+    console.log(`\n${colors.red}[Erro: Não foi possível obter resposta da API. Verifique sua conexão ou se a chave/modelo estão corretos.]${colors.reset}`);
     conversationHistory.pop();
   } else {
-    // Registra a resposta do modelo no histórico
     conversationHistory.push({
       role: 'model',
       parts: [{ text: lastAiResponse }]
@@ -171,7 +180,6 @@ async function callGeminiStream(userMessage) {
   rl.prompt();
 }
 
-// Detecção inteligente de colagem rápida (Debounce para Right-Click Paste)
 let pasteTimer = null;
 let pasteLines = [];
 
@@ -180,7 +188,7 @@ function handleSmartPaste(line) {
 
   if (pasteTimer) clearTimeout(pasteTimer);
 
-  pasteTimer = setTimeout(async () => {
+  pasteTimer = setTimeout(async function () {
     const fullText = pasteLines.join('\n').trim();
     pasteLines = [];
     pasteTimer = null;
@@ -190,13 +198,13 @@ function handleSmartPaste(line) {
       return;
     }
 
-    if (fullText.startsWith('/')) {
+    if (fullText.indexOf('/') === 0) {
       handleCommand(fullText);
       return;
     }
 
     await callGeminiStream(fullText);
-  }, 120); // 120ms é o tempo suficiente para detectar linhas chegando em lote na colagem do mouse
+  }, 120);
 }
 
 function handleCommand(cmd) {
@@ -224,9 +232,9 @@ function handleCommand(cmd) {
     blockMode = true;
     blockBuffer = [];
     console.log(`\n${colors.yellow}================ MODO DE COLAGEM ATIVADO ================${colors.reset}`);
-    console.log(`1. Clique com o botão direito para colar seu código ou texto grande.`);
-    console.log(`2. Quando terminar de colar tudo, digite ${colors.bright}${colors.green}/enviar${colors.reset} para processar.`);
-    console.log(`   (Ou digite ${colors.red}/cancelar${colors.reset} para descartar)`);
+    console.log(`1. Cole seu texto ou código.`);
+    console.log(`2. Digite ${colors.bright}${colors.green}/enviar${colors.reset} para processar.`);
+    console.log(`   (Ou ${colors.red}/cancelar${colors.reset} para descartar)`);
     console.log(`${colors.yellow}=========================================================${colors.reset}\n`);
     rl.setPrompt(`${colors.yellow}Bloco > ${colors.reset}`);
     rl.prompt();
@@ -239,7 +247,7 @@ function handleCommand(cmd) {
     } else {
       const fileName = `resposta_${Date.now()}.txt`;
       fs.writeFileSync(fileName, lastAiResponse, 'utf8');
-      console.log(`\n${colors.green}[Resposta salva com sucesso em: ${path.resolve(fileName)}]${colors.reset}\n`);
+      console.log(`\n${colors.green}[Resposta salva em: ${path.resolve(fileName)}]${colors.reset}\n`);
     }
     rl.prompt();
     return;
@@ -253,10 +261,9 @@ function handleCommand(cmd) {
 printHeader();
 rl.prompt();
 
-rl.on('line', (line) => {
+rl.on('line', function (line) {
   if (isGenerating) return;
 
-  // Se estiver no MODO BLOCO (/colar)
   if (blockMode) {
     const trimmed = line.trim().toLowerCase();
     if (trimmed === '/enviar' || trimmed === '/fim') {
@@ -286,17 +293,15 @@ rl.on('line', (line) => {
     return;
   }
 
-  // Se for comando simples digitado
-  if (line.trim().startsWith('/') && pasteLines.length === 0) {
+  if (line.trim().indexOf('/') === 0 && pasteLines.length === 0) {
     handleCommand(line);
     return;
   }
 
-  // Modo Normal: Processamento com buffer inteligente para captura de colagens com botão direito
   handleSmartPaste(line);
 });
 
-rl.on('close', () => {
+rl.on('close', function () {
   console.log(`\n${colors.yellow}Até logo!${colors.reset}`);
   process.exit(0);
 });
